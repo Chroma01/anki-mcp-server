@@ -32,7 +32,8 @@ export class ReviewStatsTool {
       "Use this to analyze learning progress over time, identify review patterns, and track consistency. " +
       "Requires a start date; the deck is optional - omit it to analyze the entire collection (all decks). " +
       "End date defaults to today. " +
-      "Days are calendar days (midnight to midnight) in the timezone of the machine running the server, assumed to be the machine running Anki; Anki's 'next day starts at' hour is not applied.",
+      "Days are calendar days (midnight to midnight) in the timezone of the machine running the server, assumed to be the machine running Anki; Anki's 'next day starts at' hour is not applied. " +
+      "Reviews of cards that were deleted afterwards are not included, so totals can be lower than Anki's own statistics.",
     parameters: z
       .object({
         deck: z
@@ -249,6 +250,11 @@ export class ReviewStatsTool {
    * `CardReviewTuple` layout the per-deck path produces so the downstream
    * aggregation is identical. Reviews at or before `startTimestamp` are dropped
    * here to mirror cardReviews' strict `startID` lower bound (revlog `id > ?`).
+   *
+   * `findCards` only lists cards that still exist, so review-log rows of
+   * since-deleted cards are never seen here. The per-deck `cardReviews` path
+   * has the same blind spot - it joins against the cards table too. Anki's
+   * own counts read the raw revlog directly and so include those reviews.
    */
   private async fetchCollectionReviews(
     startTimestamp: number,
@@ -293,7 +299,9 @@ export class ReviewStatsTool {
   }
 
   /**
-   * Today's local calendar day (YYYY-MM-DD), matching Anki's notion of "today".
+   * Today's local calendar day (YYYY-MM-DD), midnight to midnight. Anki's
+   * own "today" is additionally shifted by its "next day starts at" hour,
+   * which is not applied here.
    */
   private getTodayKey(): string {
     return toLocalDayKey(Date.now());

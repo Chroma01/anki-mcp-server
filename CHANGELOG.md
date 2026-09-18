@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- `review_stats` now documents that reviews of cards deleted afterwards are not counted (AnkiConnect only exposes review logs of existing cards), so totals can be lower than Anki's own statistics.
+
 ## [0.26.0] - 2026-09
 
 - **`review_stats`: fixed the study streak always reporting 0 west of UTC; days are now local days.** `calculateStreak` compared a date parsed as UTC midnight against a local midnight, so for any host timezone behind UTC the first comparison failed and the streak collapsed to 0. It was invisible in UTC and east of it, which is why CI never caught it. Day boundaries throughout the tool now follow the server's local timezone instead of UTC, matching how Anki defines a day: `reviews_by_day` files an evening review under the day it was done (previously a 9pm review in UTC-7 was reported as tomorrow, and a 1am review in UTC+3 as yesterday), `end_date` defaults to the local calendar day, and the `start_date`/`end_date` window spans local days. This assumes the server shares Anki's timezone (true for the default localhost setup); Anki's configurable "next day starts at" hour is not honoured yet, as AnkiConnect exposes no action for it. A timezone-pinned regression spec (`review-stats.timezone.spec.ts`, using a custom Jest environment in `test/jest-environments/`) now runs as part of the normal suite.
