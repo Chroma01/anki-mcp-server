@@ -83,7 +83,7 @@ src/
     ├── clients/anki-connect.client.ts  # HTTP client using ky (retries, error handling, read-only guard)
     ├── config/anki-config.interface.ts # ANKI_CONFIG injection token + IAnkiConfig interface
     ├── types/anki.types.ts             # Shared Anki types (cards, notes, ratings)
-    ├── utils/                          # Shared utilities (anki.utils, markdown.utils, stats.utils, media-validation.utils, card-states.utils, deck-hierarchy.utils)
+    ├── utils/                          # Shared utilities (anki.utils, markdown.utils, stats.utils, media-validation.utils, card-states.utils, deck-hierarchy.utils, card-validation.utils, card-suspension.utils)
     ├── primitives/essential/           # Core tools, prompts, resources
     └── primitives/gui/                 # GUI-specific tools (require user approval)
 ```
@@ -107,7 +107,7 @@ All tools/prompts/resources are `@McpController()` classes listed in each primit
 
 ### Key Patterns
 
-**Tool response format**: Success paths return raw objects matching the tool's `outputSchema`. The mcp-nest handler validates and wraps them automatically. Error paths use `createErrorResponse(error, context)` from `anki.utils.ts` which returns `CallToolResult` with `isError: true` and bypasses outputSchema validation.
+**Tool response format**: Success paths return raw objects matching the tool's `outputSchema`. The mcp-nest handler validates and wraps them automatically. Error paths use `createErrorResponse(error, context)` from `anki.utils.ts` which returns `CallToolResult` with `isError: true` and bypasses outputSchema validation. Two distinct `success: false` shapes exist: with `error` + `isError: true` (from `createErrorResponse`) the call failed; without them (see `add-notes.tool.ts`, `suspend`/`unsuspend`) the call ran and the payload describes a partial outcome — routing those through `createErrorResponse` would drop `structuredContent`.
 
 **Action helper pattern**: The former aggregate tools (`deckActions`, `tagActions`, `mediaActions`) were split into single-purpose tools (`list-decks.tool.ts`, `deck-stats.tool.ts`, `create-deck.tool.ts`, `change-deck.tool.ts`, `store-media-file.tool.ts`, `replace-tags.tool.ts`, …). Their directories now hold only `actions/*.action.ts` — pure functions taking `(params, ankiClient)` that the split tools import. The tool class stays thin: log, call the helper, wrap failures in `createErrorResponse`.
 
@@ -193,6 +193,7 @@ These are upstream behaviors that shape tool design — surface them in tool des
 3. Add to `ESSENTIAL_MCP_TOOLS` array
 4. **Update `manifest.json`** tools array
 5. Create test: `src/mcp/primitives/essential/tools/__tests__/your-tool.tool.spec.ts`
+6. **Add a `CHANGELOG.md` entry** under the top `[Unreleased]` section
 
 **Note**: `ESSENTIAL_MCP_TOOLS` is the module's `controllers` array — tools, prompts, and resources that MCP-Nest discovers. Infrastructure (`AnkiConnectClient`, the config providers) is listed inline in the module's `providers`.
 
@@ -266,9 +267,10 @@ npm run e2e:full:local      # All-in-one: up → test → down
 ## Release Process
 
 1. Update version in `package.json` (single source of truth — pre-commit hook syncs to `manifest.json`)
-2. **Add new tools to `manifest.json` tools array**
-3. Commit and tag: `git tag -a v0.x.0 -m "message" && git push origin v0.x.0`
-4. GitHub Actions handles: version sync, build, MCPB bundle, npm publish, GitHub release
+2. Rename the `## [Unreleased]` section in `CHANGELOG.md` to the new version and date
+3. **Add new tools to `manifest.json` tools array**
+4. Commit and tag: `git tag -a v0.x.0 -m "message" && git push origin v0.x.0`
+5. GitHub Actions handles: version sync, build, MCPB bundle, npm publish, GitHub release
 
 **npm publishing** uses OIDC Trusted Publishing (no `NPM_TOKEN` needed). The `--provenance` flag triggers OIDC auth and generates cryptographic attestations. Configured in `npm-publish.yml` and `npm-publish-legacy.yml`.
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+- **New `suspend` / `unsuspend` / `areSuspended` tools** — suspend hides cards from review without touching note content, scheduling history or deck placement; unsuspend returns them. `areSuspended` reports state without changing anything. Card IDs (not note IDs), max 500 per call, duplicates deduped before mutating.
+- `suspend`/`unsuspend` validate every card ID before mutating: AnkiConnect handles nonexistent IDs inconsistently (usually an error, sometimes a silent skip depending on input order), so IDs are checked up front via `areSuspended`, which reports a missing card as `null`, and nothing is changed if any is missing. Shared logic lives in `src/mcp/utils/card-suspension.utils.ts`.
+- Suspension state is read back after the mutation, so the response reports what Anki actually did rather than what was requested. When the read-back can't be trusted (an error, or a reply that isn't array-shaped, doesn't match the input count, or contains an entry that is neither a boolean nor `null`), `cards` comes back empty, `cardsChanged` is omitted and `message` says so explicitly — the mutation itself was still applied, so the caller should not retry.
+
 ## [0.25.1] - 2026-09
 
 - `notesInfo` no longer requires `mod` in the AnkiConnect response, so older add-on builds work (fixes #66).
