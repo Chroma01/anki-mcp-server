@@ -6,7 +6,9 @@ name: Publish to MCP Registry
 #      Fires only when npm publish completes successfully (gated by the
 #      `if:` on the job). Chaining on npm-publish (rather than Release)
 #      guarantees the npm tarball is already on registry.npmjs.org by the
-#      time this workflow starts, so no propagation polling is needed.
+#      time this workflow starts, but the MCP Registry's own validation can
+#      still briefly not see the new version - the publish step below
+#      retries to cover that.
 #      When triggered this way, we check out
 #      github.event.workflow_run.head_sha so version/server.json reflect
 #      the commit that was actually released.
@@ -148,6 +150,28 @@ jobs:
             --domain ankimcp.ai \
             --private-key "$MCP_REGISTRY_PRIVATE_KEY"
 
+      # Retry: the MCP Registry server validates the npm package by querying
+      # registry.npmjs.org, and a version published seconds earlier is not yet
+      # visible there - the API returns 400 with "version 'X' was not found
+      # (status: 404)". This workflow fires ~10s after `npm publish` completes,
+      # and the first attempt failed that way on 0.25.0, 0.25.1 and 0.26.0,
+      # each needing a manual re-run. Back off linearly instead.
       - name: Publish server to MCP Registry
         if: steps.resolve_version.outputs.is_prerelease == 'false'
-        run: ./mcp-publisher publish
+        run: |
+          max_attempts=6
+          delay=30
+          for attempt in $(seq 1 "$max_attempts"); do
+            echo "Publish attempt $attempt of $max_attempts..."
+            if ./mcp-publisher publish; then
+              echo "Publish succeeded on attempt $attempt."
+              exit 0
+            fi
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              echo "Publish failed on attempt $attempt; waiting ${delay}s before retrying..."
+              sleep "$delay"
+              delay=$((delay + 30))
+            fi
+          done
+          echo "::error::Publish to MCP Registry failed after $max_attempts attempts."
+          exit 1
