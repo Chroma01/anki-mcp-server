@@ -83,7 +83,7 @@ src/
     ├── clients/anki-connect.client.ts  # HTTP client using ky (retries, error handling, read-only guard)
     ├── config/anki-config.interface.ts # ANKI_CONFIG injection token + IAnkiConfig interface
     ├── types/anki.types.ts             # Shared Anki types (cards, notes, ratings)
-    ├── utils/                          # Shared utilities (anki.utils, markdown.utils, stats.utils, media-validation.utils, card-states.utils, deck-hierarchy.utils, card-validation.utils, card-suspension.utils)
+    ├── utils/                          # Shared utilities (anki.utils, date.utils, markdown.utils, stats.utils, media-validation.utils, card-states.utils, deck-hierarchy.utils, card-validation.utils, card-suspension.utils)
     ├── primitives/essential/           # Core tools, prompts, resources
     └── primitives/gui/                 # GUI-specific tools (require user approval)
 ```
@@ -240,6 +240,7 @@ Shared test infra:
 
 - `src/test-fixtures/test-helpers.ts` — `parseToolResult()`, `createMockContext()`
 - `src/test-fixtures/mock-data.ts` — `mockNotes`, `mockDecks`, `mockCards`, `mockErrors`
+- `test/jest-environments/timezone.environment.ts` — Jest environment that pins the process timezone for one spec file via a `@jest-environment` docblock (writing `process.env.TZ` inside a test has no effect — Jest sandboxes `process.env`). Use it for anything that depends on local-day boundaries.
 
 ```bash
 # Single test file

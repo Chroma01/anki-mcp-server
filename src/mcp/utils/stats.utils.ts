@@ -2,6 +2,8 @@
  * Statistical utility functions for Anki MCP tools
  */
 
+import { addDaysToDayKey } from "@/mcp/utils/date.utils";
+
 /**
  * Distribution calculation result
  */
@@ -257,58 +259,46 @@ export function computeRetention(buttonPresses: number[]): RetentionMetrics {
 }
 
 /**
- * Calculate study streak (consecutive days from today backwards)
+ * Calculate study streak: consecutive days with at least one review, counting
+ * back from `todayKey`.
  *
- * Counts backwards from today until the first day with no reviews.
- * A day must have at least 1 review to count towards the streak.
+ * Both the review dates and `todayKey` are day keys (YYYY-MM-DD) produced by
+ * the caller, so this is a pure string computation - it never reads the clock
+ * and never parses a Date. Deciding which calendar day an instant belongs to
+ * is `toLocalDayKey`'s job.
  *
- * @param reviewsByDay - Array of review counts by date (ISO format: YYYY-MM-DD)
- * @returns Number of consecutive days studied (0 if no reviews today)
+ * @param reviewsByDay - Review counts per day key, in any order.
+ * @param todayKey - The day the streak is measured from.
+ * @returns Number of consecutive days studied (0 if `todayKey` has no reviews).
  *
  * @example
  * ```typescript
- * const streak = calculateStreak([
- *   { date: "2026-01-15", count: 10 },  // today
- *   { date: "2026-01-14", count: 5 },
- *   { date: "2026-01-13", count: 0 },   // gap - streak stops here
- *   { date: "2026-01-12", count: 8 },
- * ]);
+ * calculateStreak(
+ *   [
+ *     { date: "2026-01-15", count: 10 },
+ *     { date: "2026-01-14", count: 5 },
+ *     { date: "2026-01-13", count: 0 },  // gap - streak stops here
+ *     { date: "2026-01-12", count: 8 },
+ *   ],
+ *   "2026-01-15",
+ * );
  * // Returns: 2 (today + yesterday)
  * ```
  */
 export function calculateStreak(
   reviewsByDay: Array<{ date: string; count: number }>,
+  todayKey: string,
 ): number {
-  if (reviewsByDay.length === 0) {
-    return 0;
-  }
-
-  // Sort by date descending (most recent first)
-  const sorted = [...reviewsByDay].sort(
-    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+  const studiedDays = new Set(
+    reviewsByDay.filter((day) => day.count > 0).map((day) => day.date),
   );
 
   let streak = 0;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  let dayKey = todayKey;
 
-  for (let i = 0; i < sorted.length; i++) {
-    const reviewDate = new Date(sorted[i].date);
-    reviewDate.setHours(0, 0, 0, 0);
-
-    // Calculate expected date (today - i days)
-    const expectedDate = new Date(today);
-    expectedDate.setDate(expectedDate.getDate() - i);
-
-    // Check if this date matches and has reviews
-    if (
-      reviewDate.getTime() === expectedDate.getTime() &&
-      sorted[i].count > 0
-    ) {
-      streak++;
-    } else {
-      break;
-    }
+  while (studiedDays.has(dayKey)) {
+    streak++;
+    dayKey = addDaysToDayKey(dayKey, -1);
   }
 
   return streak;

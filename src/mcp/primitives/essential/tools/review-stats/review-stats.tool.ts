@@ -6,13 +6,15 @@ import { AnkiConnectClient } from "@/mcp/clients/anki-connect.client";
 import { createErrorResponse } from "@/mcp/utils/anki.utils";
 import { computeRetention, calculateStreak } from "@/mcp/utils/stats.utils";
 import {
+  addDaysToDayKey,
+  localDayStartMs,
+  toLocalDayKey,
+} from "@/mcp/utils/date.utils";
+import {
   ReviewStatsResult,
   CardReviewTuple,
   CardReviewObject,
 } from "./review-stats.types";
-
-/** Milliseconds in one day */
-const MS_PER_DAY = 86400000;
 
 /**
  * Tool for getting review history analysis with retention and streak metrics
@@ -29,7 +31,8 @@ export class ReviewStatsTool {
       "Get review history analysis including temporal patterns, retention metrics, and study streak information. " +
       "Use this to analyze learning progress over time, identify review patterns, and track consistency. " +
       "Requires a start date; the deck is optional - omit it to analyze the entire collection (all decks). " +
-      "End date defaults to today.",
+      "End date defaults to today. " +
+      "Days are calendar days (midnight to midnight) in the timezone of the machine running the server, assumed to be the machine running Anki; Anki's 'next day starts at' hour is not applied.",
     parameters: z
       .object({
         deck: z
@@ -123,16 +126,18 @@ export class ReviewStatsTool {
       const deck =
         params.deck && params.deck.length > 0 ? params.deck : undefined;
       const deckLabel = deck ?? "All Decks";
-      const end_date = params.end_date || this.getTodayISO();
+      const todayKey = this.getTodayKey();
+      const end_date = params.end_date || todayKey;
 
       this.logger.log(
         `Getting review statistics from ${start_date} to ${end_date} for deck: ${deckLabel}`,
       );
 
-      // Convert dates to timestamps (in milliseconds)
-      // Note: Using local timezone to match Anki's behavior for "today"
-      const startTimestamp = new Date(start_date).getTime();
-      const endTimestamp = new Date(end_date).getTime() + MS_PER_DAY; // Add 1 day to include end date
+      // Day boundaries follow the server's local timezone, midnight to
+      // midnight; Anki's "next day starts at" hour is not applied. See
+      // date.utils.ts for the same-machine assumption.
+      const startTimestamp = localDayStartMs(start_date);
+      const endTimestamp = localDayStartMs(addDaysToDayKey(end_date, 1));
 
       // Step 1: Get detailed review data.
       // A specific deck uses AnkiConnect's `cardReviews` (exact deck, no subdeck
@@ -163,7 +168,7 @@ export class ReviewStatsTool {
       const reviewsByDayMap = new Map<string, number>();
 
       for (const review of filteredReviews) {
-        const date = new Date(review[0]).toISOString().split("T")[0];
+        const date = toLocalDayKey(review[0]);
         reviewsByDayMap.set(date, (reviewsByDayMap.get(date) ?? 0) + 1);
       }
 
@@ -199,7 +204,7 @@ export class ReviewStatsTool {
           : null;
 
       // Calculate streak
-      const streak = calculateStreak(reviewsByDay);
+      const streak = calculateStreak(reviewsByDay, todayKey);
 
       const result: ReviewStatsResult = {
         period: {
@@ -288,11 +293,9 @@ export class ReviewStatsTool {
   }
 
   /**
-   * Get today's date in ISO format (YYYY-MM-DD)
-   * Uses local timezone to match Anki's behavior for "today"
+   * Today's local calendar day (YYYY-MM-DD), matching Anki's notion of "today".
    */
-  private getTodayISO(): string {
-    const today = new Date();
-    return today.toISOString().split("T")[0];
+  private getTodayKey(): string {
+    return toLocalDayKey(Date.now());
   }
 }

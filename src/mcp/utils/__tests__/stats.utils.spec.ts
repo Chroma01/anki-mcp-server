@@ -391,40 +391,28 @@ describe("computeRetention", () => {
 });
 
 describe("calculateStreak", () => {
-  // Pin the clock to noon UTC so that .toISOString().split("T")[0] and the
-  // local-time "today" inside calculateStreak always resolve to the same
-  // calendar date, regardless of the host timezone or time of day.
-  const FAKE_NOW = Date.UTC(2026, 2, 15, 12); // 2026-03-15 12:00 UTC
-
-  beforeEach(() => {
-    jest.useFakeTimers({ now: FAKE_NOW });
-  });
-
-  afterEach(() => {
-    jest.useRealTimers();
-  });
+  // No clock, no Date: review keys and "today" are explicit inputs, so
+  // these hold in every timezone.
+  const TODAY = "2026-03-15";
 
   describe("no reviews", () => {
     it("should return 0 for empty array", () => {
-      const result = calculateStreak([]);
+      const result = calculateStreak([], TODAY);
 
       expect(result).toBe(0);
     });
 
     it("should return 0 if no reviews today", () => {
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split("T")[0];
-
-      const result = calculateStreak([{ date: yesterdayStr, count: 10 }]);
+      const result = calculateStreak(
+        [{ date: "2026-03-14", count: 10 }],
+        TODAY,
+      );
 
       expect(result).toBe(0);
     });
 
     it("should return 0 if today has 0 reviews", () => {
-      const today = new Date().toISOString().split("T")[0];
-
-      const result = calculateStreak([{ date: today, count: 0 }]);
+      const result = calculateStreak([{ date: TODAY, count: 0 }], TODAY);
 
       expect(result).toBe(0);
     });
@@ -432,43 +420,34 @@ describe("calculateStreak", () => {
 
   describe("continuous streak", () => {
     it("should count consecutive days from today", () => {
-      const dates = [];
-      const today = new Date();
+      const dates = [
+        { date: "2026-03-15", count: 10 },
+        { date: "2026-03-14", count: 10 },
+        { date: "2026-03-13", count: 10 },
+        { date: "2026-03-12", count: 10 },
+        { date: "2026-03-11", count: 10 },
+      ];
 
-      for (let i = 0; i < 5; i++) {
-        const date = new Date(today);
-        date.setDate(date.getDate() - i);
-        dates.push({
-          date: date.toISOString().split("T")[0],
-          count: 10,
-        });
-      }
-
-      const result = calculateStreak(dates);
+      const result = calculateStreak(dates, TODAY);
 
       expect(result).toBe(5);
     });
 
     it("should handle single day streak", () => {
-      const today = new Date().toISOString().split("T")[0];
-
-      const result = calculateStreak([{ date: today, count: 5 }]);
+      const result = calculateStreak([{ date: TODAY, count: 5 }], TODAY);
 
       expect(result).toBe(1);
     });
 
     it("should handle unsorted input", () => {
-      const today = new Date();
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const twoDaysAgo = new Date(today);
-      twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
-
-      const result = calculateStreak([
-        { date: yesterday.toISOString().split("T")[0], count: 5 },
-        { date: today.toISOString().split("T")[0], count: 10 },
-        { date: twoDaysAgo.toISOString().split("T")[0], count: 3 },
-      ]);
+      const result = calculateStreak(
+        [
+          { date: "2026-03-14", count: 5 },
+          { date: "2026-03-15", count: 10 },
+          { date: "2026-03-13", count: 3 },
+        ],
+        TODAY,
+      );
 
       expect(result).toBe(3);
     });
@@ -476,65 +455,26 @@ describe("calculateStreak", () => {
 
   describe("broken streak", () => {
     it("should stop at first gap", () => {
-      const today = new Date();
-      const dates = [];
+      const dates = [
+        { date: "2026-03-15", count: 10 }, // today
+        { date: "2026-03-14", count: 5 }, // yesterday
+        // Gap (2026-03-13 - no entry)
+        { date: "2026-03-12", count: 8 }, // should not count
+      ];
 
-      // Today
-      dates.push({
-        date: today.toISOString().split("T")[0],
-        count: 10,
-      });
-
-      // Yesterday
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      dates.push({
-        date: yesterday.toISOString().split("T")[0],
-        count: 5,
-      });
-
-      // Gap (2 days ago - no entry)
-
-      // 3 days ago (should not count)
-      const threeDaysAgo = new Date(today);
-      threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
-      dates.push({
-        date: threeDaysAgo.toISOString().split("T")[0],
-        count: 8,
-      });
-
-      const result = calculateStreak(dates);
+      const result = calculateStreak(dates, TODAY);
 
       expect(result).toBe(2);
     });
 
     it("should stop at day with 0 reviews", () => {
-      const today = new Date();
-      const dates = [];
+      const dates = [
+        { date: "2026-03-15", count: 10 }, // today
+        { date: "2026-03-14", count: 0 }, // breaks streak
+        { date: "2026-03-13", count: 5 },
+      ];
 
-      // Today
-      dates.push({
-        date: today.toISOString().split("T")[0],
-        count: 10,
-      });
-
-      // Yesterday with 0 reviews (breaks streak)
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      dates.push({
-        date: yesterday.toISOString().split("T")[0],
-        count: 0,
-      });
-
-      // 2 days ago
-      const twoDaysAgo = new Date(today);
-      twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
-      dates.push({
-        date: twoDaysAgo.toISOString().split("T")[0],
-        count: 5,
-      });
-
-      const result = calculateStreak(dates);
+      const result = calculateStreak(dates, TODAY);
 
       expect(result).toBe(1);
     });
@@ -542,74 +482,62 @@ describe("calculateStreak", () => {
 
   describe("real-world examples", () => {
     it("should calculate week-long streak", () => {
-      const today = new Date();
-      const dates = [];
+      const dates = [
+        { date: "2026-03-15", count: 12 },
+        { date: "2026-03-14", count: 3 },
+        { date: "2026-03-13", count: 20 },
+        { date: "2026-03-12", count: 1 },
+        { date: "2026-03-11", count: 15 },
+        { date: "2026-03-10", count: 7 },
+        { date: "2026-03-09", count: 9 },
+      ];
 
-      for (let i = 0; i < 7; i++) {
-        const date = new Date(today);
-        date.setDate(date.getDate() - i);
-        dates.push({
-          date: date.toISOString().split("T")[0],
-          count: Math.floor(Math.random() * 20) + 1, // Random 1-20 reviews
-        });
-      }
-
-      const result = calculateStreak(dates);
+      const result = calculateStreak(dates, TODAY);
 
       expect(result).toBe(7);
     });
 
     it("should handle partial historical data", () => {
-      const today = new Date();
-      const dates = [];
+      const dates = [
+        { date: "2026-03-15", count: 10 }, // today
+        { date: "2026-03-14", count: 5 }, // yesterday
+        // No data for 2026-03-13 (implicit gap)
+      ];
 
-      // Only today and yesterday
-      dates.push({
-        date: today.toISOString().split("T")[0],
-        count: 10,
-      });
-
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      dates.push({
-        date: yesterday.toISOString().split("T")[0],
-        count: 5,
-      });
-
-      // No data for 2 days ago (implicit gap)
-
-      const result = calculateStreak(dates);
+      const result = calculateStreak(dates, TODAY);
 
       expect(result).toBe(2);
     });
 
     it("should handle long streak with gap in middle", () => {
-      const today = new Date();
-      const dates = [];
+      const dates = [
+        // Recent 3-day streak
+        { date: "2026-03-15", count: 10 },
+        { date: "2026-03-14", count: 10 },
+        { date: "2026-03-13", count: 10 },
+        // Gap at 2026-03-12
+        // Older streak (should not count)
+        { date: "2026-03-11", count: 10 },
+        { date: "2026-03-10", count: 10 },
+        { date: "2026-03-09", count: 10 },
+        { date: "2026-03-08", count: 10 },
+        { date: "2026-03-07", count: 10 },
+        { date: "2026-03-06", count: 10 },
+      ];
 
-      // Recent 3-day streak
-      for (let i = 0; i < 3; i++) {
-        const date = new Date(today);
-        date.setDate(date.getDate() - i);
-        dates.push({
-          date: date.toISOString().split("T")[0],
-          count: 10,
-        });
-      }
+      const result = calculateStreak(dates, TODAY);
 
-      // Gap at 3 days ago
+      expect(result).toBe(3);
+    });
 
-      // Older streak (should not count)
-      for (let i = 4; i < 10; i++) {
-        const date = new Date(today);
-        date.setDate(date.getDate() - i);
-        dates.push({
-          date: date.toISOString().split("T")[0],
-          count: 10,
-        });
-      }
+    it("should count a streak that spans a month boundary", () => {
+      const dates = [
+        { date: "2026-03-01", count: 10 },
+        { date: "2026-02-28", count: 10 },
+        { date: "2026-02-27", count: 10 },
+      ];
 
-      const result = calculateStreak(dates);
+      const result = calculateStreak(dates, "2026-03-01");
 
       expect(result).toBe(3);
     });

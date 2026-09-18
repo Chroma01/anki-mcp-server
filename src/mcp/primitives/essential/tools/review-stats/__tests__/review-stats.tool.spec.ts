@@ -3,13 +3,13 @@ import { ReviewStatsTool } from "../review-stats.tool";
 import { AnkiConnectClient } from "@/mcp/clients/anki-connect.client";
 import { parseToolResult } from "@/test-fixtures/test-helpers";
 import { ReviewStatsResult } from "../review-stats.types";
+import { localDayStartMs } from "@/mcp/utils/date.utils";
+
+/** Local noon on `dayKey` - unambiguous under local-day bucketing in any TZ. */
+const localNoon = (dayKey: string) => localDayStartMs(dayKey) + 12 * 3_600_000;
 
 // Mock the AnkiConnectClient
 jest.mock("@/mcp/clients/anki-connect.client");
-
-// Noon UTC -- ensures .toISOString().split("T")[0] and local-time "today"
-// inside calculateStreak resolve to the same calendar date in any timezone.
-const FAKE_NOW = Date.UTC(2026, 2, 15, 12); // 2026-03-15 12:00 UTC
 
 describe("ReviewStatsTool", () => {
   let tool: ReviewStatsTool;
@@ -52,13 +52,14 @@ describe("ReviewStatsTool", () => {
           // exclusive-boundary behavior is NOT exercised here. That boundary
           // is covered by the collection-path test
           // ("should exclude a review whose timestamp equals the window start").
-          const startTimestamp = new Date(startDate).getTime();
+          const day1Ts = localNoon(startDate);
+          const day2Ts = localNoon("2026-01-11");
           const reviews: any[] = [];
 
           // Day 1: 10 reviews (8 good, 2 again)
           for (let i = 0; i < 8; i++) {
             reviews.push([
-              startTimestamp + i * 1000,
+              day1Ts + i * 1000,
               1000 + i,
               -1,
               3,
@@ -71,7 +72,7 @@ describe("ReviewStatsTool", () => {
           }
           for (let i = 0; i < 2; i++) {
             reviews.push([
-              startTimestamp + 8000 + i * 1000,
+              day1Ts + 8000 + i * 1000,
               1008 + i,
               -1,
               1,
@@ -86,7 +87,7 @@ describe("ReviewStatsTool", () => {
           // Day 2: 15 reviews (12 good, 2 hard, 1 easy)
           for (let i = 0; i < 12; i++) {
             reviews.push([
-              startTimestamp + 86400000 + i * 1000,
+              day2Ts + i * 1000,
               2000 + i,
               -1,
               3,
@@ -99,7 +100,7 @@ describe("ReviewStatsTool", () => {
           }
           for (let i = 0; i < 2; i++) {
             reviews.push([
-              startTimestamp + 86400000 + 12000 + i * 1000,
+              day2Ts + 12000 + i * 1000,
               2012 + i,
               -1,
               2,
@@ -110,17 +111,7 @@ describe("ReviewStatsTool", () => {
               0,
             ]);
           }
-          reviews.push([
-            startTimestamp + 86400000 + 14000,
-            2014,
-            -1,
-            4,
-            4,
-            -60,
-            2500,
-            6157,
-            0,
-          ]);
+          reviews.push([day2Ts + 14000, 2014, -1, 4, 4, -60, 2500, 6157, 0]);
 
           return Promise.resolve(reviews);
         }
@@ -139,7 +130,7 @@ describe("ReviewStatsTool", () => {
       // Assert
       expect(ankiClient.invoke).toHaveBeenCalledTimes(1);
       expect(ankiClient.invoke).toHaveBeenCalledWith("cardReviews", {
-        startID: new Date(startDate).getTime(),
+        startID: localDayStartMs(startDate),
         deck: deckName,
       });
 
@@ -223,7 +214,7 @@ describe("ReviewStatsTool", () => {
 
       ankiClient.invoke.mockImplementation((action: string) => {
         if (action === "cardReviews") {
-          const startTimestamp = new Date(startDate).getTime();
+          const dayTs = localNoon(startDate);
           const reviews: any[] = [];
 
           // Create known distribution:
@@ -234,11 +225,11 @@ describe("ReviewStatsTool", () => {
           // Total: 100, Retention: 90/100 = 0.90
 
           for (let i = 0; i < 10; i++) {
-            reviews.push([startTimestamp + i, i, -1, 1, 4, -60, 2500, 6157, 0]); // Again
+            reviews.push([dayTs + i, i, -1, 1, 4, -60, 2500, 6157, 0]); // Again
           }
           for (let i = 0; i < 20; i++) {
             reviews.push([
-              startTimestamp + 10 + i,
+              dayTs + 10 + i,
               10 + i,
               -1,
               2,
@@ -251,7 +242,7 @@ describe("ReviewStatsTool", () => {
           }
           for (let i = 0; i < 50; i++) {
             reviews.push([
-              startTimestamp + 30 + i,
+              dayTs + 30 + i,
               30 + i,
               -1,
               3,
@@ -264,7 +255,7 @@ describe("ReviewStatsTool", () => {
           }
           for (let i = 0; i < 20; i++) {
             reviews.push([
-              startTimestamp + 80 + i,
+              dayTs + 80 + i,
               80 + i,
               -1,
               4,
@@ -301,73 +292,34 @@ describe("ReviewStatsTool", () => {
 
     it("should calculate streak accurately", async () => {
       // Pin the clock so streak date logic is deterministic
-      jest.useFakeTimers({ now: FAKE_NOW });
+      jest.useFakeTimers({ now: localNoon("2026-03-15") });
 
       try {
         // Arrange
         const deckName = "Streak";
-        const today = new Date();
-        const todayStr = today.toISOString().split("T")[0];
-
-        // Create dates for continuous streak
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayStr = yesterday.toISOString().split("T")[0];
-
-        const twoDaysAgo = new Date(today);
-        twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
-        const twoDaysAgoStr = twoDaysAgo.toISOString().split("T")[0];
+        const days = ["2026-03-13", "2026-03-14", "2026-03-15"];
+        const counts = [10, 15, 20];
 
         ankiClient.invoke.mockImplementation((action: string) => {
           if (action === "cardReviews") {
             // Create reviews across 3 days
-            const twoDaysAgoTimestamp = new Date(twoDaysAgoStr).getTime();
-            const yesterdayTimestamp = new Date(yesterdayStr).getTime();
-            const todayTimestamp = new Date(todayStr).getTime();
-
             const reviews: any[] = [];
-            // Day 1
-            for (let i = 0; i < 10; i++) {
-              reviews.push([
-                twoDaysAgoTimestamp + i,
-                i,
-                -1,
-                3,
-                4,
-                -60,
-                2500,
-                6157,
-                0,
-              ]);
-            }
-            // Day 2
-            for (let i = 0; i < 15; i++) {
-              reviews.push([
-                yesterdayTimestamp + i,
-                10 + i,
-                -1,
-                3,
-                4,
-                -60,
-                2500,
-                6157,
-                0,
-              ]);
-            }
-            // Day 3
-            for (let i = 0; i < 20; i++) {
-              reviews.push([
-                todayTimestamp + i,
-                25 + i,
-                -1,
-                3,
-                4,
-                -60,
-                2500,
-                6157,
-                0,
-              ]);
-            }
+
+            days.forEach((day, dayIndex) => {
+              for (let i = 0; i < counts[dayIndex]; i++) {
+                reviews.push([
+                  localNoon(day) + i,
+                  dayIndex * 100 + i,
+                  -1,
+                  3,
+                  4,
+                  -60,
+                  2500,
+                  6157,
+                  0,
+                ]);
+              }
+            });
 
             return Promise.resolve(reviews);
           }
@@ -378,7 +330,7 @@ describe("ReviewStatsTool", () => {
         // Act
         const rawResult = await tool.execute({
           deck: deckName,
-          start_date: twoDaysAgoStr,
+          start_date: days[0],
         });
         const result = parseToolResult(rawResult) as ReviewStatsResult;
 
@@ -391,53 +343,34 @@ describe("ReviewStatsTool", () => {
 
     it("should handle broken streak", async () => {
       // Pin the clock so streak date logic is deterministic
-      jest.useFakeTimers({ now: FAKE_NOW });
+      jest.useFakeTimers({ now: localNoon("2026-03-15") });
 
       try {
         // Arrange
         const deckName = "Broken";
-        const today = new Date();
-        const todayStr = today.toISOString().split("T")[0];
-
-        const twoDaysAgo = new Date(today);
-        twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
-        const twoDaysAgoStr = twoDaysAgo.toISOString().split("T")[0];
+        const days = ["2026-03-13", "2026-03-15"]; // gap on 2026-03-14
+        const counts = [10, 20];
 
         ankiClient.invoke.mockImplementation((action: string) => {
           if (action === "cardReviews") {
-            // Gap in reviews (no yesterday)
-            const twoDaysAgoTimestamp = new Date(twoDaysAgoStr).getTime();
-            const todayTimestamp = new Date(todayStr).getTime();
-
+            // Gap in reviews (no 2026-03-14)
             const reviews: any[] = [];
-            // Day 1
-            for (let i = 0; i < 10; i++) {
-              reviews.push([
-                twoDaysAgoTimestamp + i,
-                i,
-                -1,
-                3,
-                4,
-                -60,
-                2500,
-                6157,
-                0,
-              ]);
-            }
-            // Day 3 (no day 2)
-            for (let i = 0; i < 20; i++) {
-              reviews.push([
-                todayTimestamp + i,
-                10 + i,
-                -1,
-                3,
-                4,
-                -60,
-                2500,
-                6157,
-                0,
-              ]);
-            }
+
+            days.forEach((day, dayIndex) => {
+              for (let i = 0; i < counts[dayIndex]; i++) {
+                reviews.push([
+                  localNoon(day) + i,
+                  dayIndex * 100 + i,
+                  -1,
+                  3,
+                  4,
+                  -60,
+                  2500,
+                  6157,
+                  0,
+                ]);
+              }
+            });
 
             return Promise.resolve(reviews);
           }
@@ -448,7 +381,7 @@ describe("ReviewStatsTool", () => {
         // Act
         const rawResult = await tool.execute({
           deck: deckName,
-          start_date: twoDaysAgoStr,
+          start_date: days[0],
         });
         const result = parseToolResult(rawResult) as ReviewStatsResult;
 
@@ -477,27 +410,18 @@ describe("ReviewStatsTool", () => {
           // Verify deck parameter was passed
           expect(params?.deck).toBe(deckName);
 
-          const startTimestamp = new Date(startDate).getTime();
+          const day1Ts = localNoon(startDate);
+          const day2Ts = localNoon("2026-01-11");
           const reviews: any[] = [];
 
           // Return reviews across two days
           // Day 1: 10 reviews
           for (let i = 0; i < 10; i++) {
-            reviews.push([startTimestamp + i, i, -1, 3, 4, -60, 2500, 6157, 0]);
+            reviews.push([day1Ts + i, i, -1, 3, 4, -60, 2500, 6157, 0]);
           }
           // Day 2: 5 reviews
           for (let i = 0; i < 5; i++) {
-            reviews.push([
-              startTimestamp + 86400000 + i,
-              10 + i,
-              -1,
-              3,
-              4,
-              -60,
-              2500,
-              6157,
-              0,
-            ]);
+            reviews.push([day2Ts + i, 10 + i, -1, 3, 4, -60, 2500, 6157, 0]);
           }
 
           return Promise.resolve(reviews);
@@ -538,15 +462,15 @@ describe("ReviewStatsTool", () => {
 
       ankiClient.invoke.mockImplementation((action: string) => {
         if (action === "cardReviews") {
-          const startTimestamp = new Date(startDate).getTime();
+          const dayTs = localNoon(startDate);
 
           // Button press is at index 3 in the tuple
           // [timestamp, cardId, usn, buttonPressed, newInterval, lastInterval, ease, taken, type]
           return Promise.resolve([
-            [startTimestamp, 1, -1, 1, 4, -60, 2500, 100, 0], // Again
-            [startTimestamp + 1, 2, -1, 2, 4, -60, 2500, 100, 0], // Hard
-            [startTimestamp + 2, 3, -1, 3, 4, -60, 2500, 100, 0], // Good
-            [startTimestamp + 3, 4, -1, 4, 4, -60, 2500, 100, 0], // Easy
+            [dayTs, 1, -1, 1, 4, -60, 2500, 100, 0], // Again
+            [dayTs + 1, 2, -1, 2, 4, -60, 2500, 100, 0], // Hard
+            [dayTs + 2, 3, -1, 3, 4, -60, 2500, 100, 0], // Good
+            [dayTs + 3, 4, -1, 4, 4, -60, 2500, 100, 0], // Easy
           ]);
         }
 
@@ -608,54 +532,27 @@ describe("ReviewStatsTool", () => {
 
       ankiClient.invoke.mockImplementation((action: string) => {
         if (action === "cardReviews") {
-          const startTimestamp = new Date(startDate).getTime();
+          const day1Ts = localNoon(startDate);
+          const day2Ts = localNoon("2026-01-11");
+          const day3Ts = localNoon("2026-01-12");
+          const day4Ts = localNoon("2026-01-13");
           const reviews: any[] = [];
 
           // Day 1: 5 reviews (min)
           for (let i = 0; i < 5; i++) {
-            reviews.push([startTimestamp + i, i, -1, 3, 4, -60, 2500, 6157, 0]);
+            reviews.push([day1Ts + i, i, -1, 3, 4, -60, 2500, 6157, 0]);
           }
           // Day 2: 15 reviews
           for (let i = 0; i < 15; i++) {
-            reviews.push([
-              startTimestamp + 86400000 + i,
-              5 + i,
-              -1,
-              3,
-              4,
-              -60,
-              2500,
-              6157,
-              0,
-            ]);
+            reviews.push([day2Ts + i, 5 + i, -1, 3, 4, -60, 2500, 6157, 0]);
           }
           // Day 3: 25 reviews (max)
           for (let i = 0; i < 25; i++) {
-            reviews.push([
-              startTimestamp + 86400000 * 2 + i,
-              20 + i,
-              -1,
-              3,
-              4,
-              -60,
-              2500,
-              6157,
-              0,
-            ]);
+            reviews.push([day3Ts + i, 20 + i, -1, 3, 4, -60, 2500, 6157, 0]);
           }
           // Day 4: 10 reviews
           for (let i = 0; i < 10; i++) {
-            reviews.push([
-              startTimestamp + 86400000 * 3 + i,
-              45 + i,
-              -1,
-              3,
-              4,
-              -60,
-              2500,
-              6157,
-              0,
-            ]);
+            reviews.push([day4Ts + i, 45 + i, -1, 3, 4, -60, 2500, 6157, 0]);
           }
 
           return Promise.resolve(reviews);
@@ -690,27 +587,18 @@ describe("ReviewStatsTool", () => {
 
       ankiClient.invoke.mockImplementation((action: string) => {
         if (action === "cardReviews") {
-          const startTimestamp = new Date(startDate).getTime();
+          const day1Ts = localNoon(startDate);
+          const day3Ts = localNoon("2026-01-12");
           const reviews: any[] = [];
 
           // Day 1: 10 reviews
           for (let i = 0; i < 10; i++) {
-            reviews.push([startTimestamp + i, i, -1, 3, 4, -60, 2500, 6157, 0]);
+            reviews.push([day1Ts + i, i, -1, 3, 4, -60, 2500, 6157, 0]);
           }
           // Day 2: 0 reviews (should be excluded from min)
           // Day 3: 5 reviews
           for (let i = 0; i < 5; i++) {
-            reviews.push([
-              startTimestamp + 86400000 * 2 + i,
-              10 + i,
-              -1,
-              3,
-              4,
-              -60,
-              2500,
-              6157,
-              0,
-            ]);
+            reviews.push([day3Ts + i, 10 + i, -1, 3, 4, -60, 2500, 6157, 0]);
           }
 
           return Promise.resolve(reviews);
@@ -756,7 +644,8 @@ describe("ReviewStatsTool", () => {
       // Arrange
       const startDate = "2026-01-10";
       const endDate = "2026-01-11";
-      const startTs = new Date(startDate).getTime();
+      const startTs = localDayStartMs(startDate);
+      const day2Ts = localDayStartMs("2026-01-11");
 
       ankiClient.invoke.mockImplementation((action: string, params?: any) => {
         if (action === "cardReviews") {
@@ -807,7 +696,7 @@ describe("ReviewStatsTool", () => {
             ],
             "202": [
               {
-                id: startTs + 86400000 + 1000,
+                id: day2Ts + 1000,
                 usn: -1,
                 ease: 3,
                 ivl: 4,
@@ -856,7 +745,7 @@ describe("ReviewStatsTool", () => {
       // so a review at exactly startTimestamp must NOT be counted on the
       // collection-wide path either.
       const startDate = "2026-01-10";
-      const startTs = new Date(startDate).getTime();
+      const startTs = localDayStartMs(startDate);
 
       ankiClient.invoke.mockImplementation((action: string) => {
         if (action === "cardReviews") {
