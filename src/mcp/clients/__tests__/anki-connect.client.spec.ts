@@ -1307,6 +1307,7 @@ describe("AnkiConnectClient", () => {
         { action: "sync", result: null },
         { action: "suspend", result: true },
         { action: "unsuspend", result: true },
+        { action: "areSuspended", result: [true] },
         { action: "answerCards", result: [true] },
         { action: "forgetCards", result: null },
         { action: "relearnCards", result: null },

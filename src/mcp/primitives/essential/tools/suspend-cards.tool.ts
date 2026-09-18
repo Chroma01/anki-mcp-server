@@ -6,6 +6,7 @@ import { AnkiConnectClient } from "@/mcp/clients/anki-connect.client";
 import { createErrorResponse } from "@/mcp/utils/anki.utils";
 import { MissingCardIdsError } from "@/mcp/utils/card-validation.utils";
 import {
+  CardSuspensionStatus,
   cardIdsSchema,
   cardSuspensionStatusSchema,
   fetchSuspensionStatuses,
@@ -34,18 +35,29 @@ export class SuspendCardsTool {
     description:
       "Suspend cards so they're skipped during review until unsuspended. Card IDs (not note IDs) — " +
       "use get_cards, get_due_cards, or notesInfo to obtain them. Card IDs are checked for existence " +
-      "before anything is changed — AnkiConnect's own suspend action doesn't complain about bogus " +
-      "IDs, so without this check a typo would silently look like success. Suspending a card that's " +
-      "already suspended is a safe no-op, so re-running with the same IDs is safe.",
+      "first, and nothing is changed if any is missing — AnkiConnect's own suspend action handles " +
+      "nonexistent IDs inconsistently (usually an error, sometimes a silent skip depending on input " +
+      "order). Suspending a card that's " +
+      "already suspended is a safe no-op, so re-running with the same IDs is safe. IMPORTANT: Only " +
+      "suspend cards the user explicitly asked to suspend — a suspended card silently drops out of " +
+      "review until someone unsuspends it.",
     parameters: suspendCardsInputSchema,
     outputSchema: z.object({
-      success: z.boolean(),
+      success: z
+        .boolean()
+        .describe(
+          "False means the call ran but the read-back shows some cards are not " +
+            "suspended; inspect `cards` to see which. Retrying with the same IDs " +
+            "is safe. A call that failed outright returns an error instead.",
+        ),
       message: z.string(),
       cardsRequested: z.number(),
       cardsChanged: z
         .number()
+        .optional()
         .describe(
-          "Cards that were NOT suspended before this call and are suspended now",
+          "Cards that were NOT suspended before this call and are suspended now. " +
+            "Omitted when the read-back failed — the suspend was still applied.",
         ),
       alreadySuspended: z
         .array(z.number())
@@ -53,7 +65,9 @@ export class SuspendCardsTool {
       cards: z
         .array(cardSuspensionStatusSchema)
         .describe(
-          "Final suspension status of each requested card, read back after the mutation",
+          "Final suspension status of each requested card, read back after the " +
+            "mutation. Empty when the read-back failed — the suspend itself still " +
+            "succeeded, so check `message` rather than treating an empty array as a no-op.",
         ),
     }),
     annotations: {
@@ -79,7 +93,8 @@ export class SuspendCardsTool {
       }
 
       // areSuspended reports a nonexistent card ID as null, which doubles as
-      // the existence check — suspend itself would silently no-op on bogus IDs.
+      // the existence check — suspend itself handles bogus IDs inconsistently
+      // (errors or silently skips them depending on input order).
       const before = await fetchSuspensionStatuses(cards, this.ankiClient);
       const missingIds = findMissingCardIds(before);
       if (missingIds.length > 0) {
@@ -98,26 +113,49 @@ export class SuspendCardsTool {
       // outcome comes from the areSuspended read-back below.
       await this.ankiClient.invoke<boolean>("suspend", { cards });
 
-      const after = await fetchSuspensionStatuses(cards, this.ankiClient);
-      const cardsChanged = after.filter(
-        (status, index) =>
-          status.suspended === true && before[index].suspended !== true,
-      ).length;
-      const stillNotSuspended = after.filter(
-        (status) => status.suspended !== true,
-      ).length;
-      const success = stillNotSuspended === 0;
+      // The suspend is committed from here on. Everything below is reporting,
+      // so it gets its own error handling: surfacing a read-back failure as a
+      // failed call would invite a retry of a mutation that already landed.
+      let after: CardSuspensionStatus[] = [];
+      let cardsChanged: number | undefined;
+      let stillNotSuspended = 0;
+      let readBackFailed = false;
 
-      this.logger.log(
-        `suspend: ${cardsChanged} card(s) newly suspended, ${alreadySuspended.length} already suspended`,
-      );
+      try {
+        after = await fetchSuspensionStatuses(cards, this.ankiClient);
+        cardsChanged = after.filter(
+          (status, index) =>
+            status.suspended === true && before[index].suspended !== true,
+        ).length;
+        stillNotSuspended = after.filter(
+          (status) => status.suspended !== true,
+        ).length;
+      } catch (readBackError) {
+        readBackFailed = true;
+        this.logger.warn(
+          `Suspended ${cards.length} card(s) but could not read the new ` +
+            `suspension state back`,
+          readBackError,
+        );
+      }
+
+      const success = readBackFailed || stillNotSuspended === 0;
+
+      if (!readBackFailed) {
+        this.logger.log(
+          `suspend: ${cardsChanged} card(s) newly suspended, ${alreadySuspended.length} already suspended`,
+        );
+      }
 
       return {
         success,
-        message: success
-          ? `Suspended ${cards.length} card(s): ${cardsChanged} newly suspended, ` +
-            `${alreadySuspended.length} already suspended`
-          : `Requested suspend of ${cards.length} card(s), but ${stillNotSuspended} did not end up suspended`,
+        message: readBackFailed
+          ? `Suspended ${cards.length} card(s), but reading the new suspension ` +
+            `state back failed. The suspend was applied — do not retry.`
+          : success
+            ? `Suspended ${cards.length} card(s): ${cardsChanged} newly suspended, ` +
+              `${alreadySuspended.length} already suspended`
+            : `Requested suspend of ${cards.length} card(s), but ${stillNotSuspended} did not end up suspended`,
         cardsRequested: cards.length,
         cardsChanged,
         alreadySuspended,

@@ -148,6 +148,79 @@ describe("SuspendCardsTool", () => {
     expect(result.error).toContain("collection is not open");
   });
 
+  it("should still report success when the read-back fails after the suspend", async () => {
+    const cards = [111, 222];
+    ankiClient.invoke
+      .mockResolvedValueOnce([false, true]) // before — 222 already suspended
+      .mockResolvedValueOnce(true) // suspend
+      .mockRejectedValueOnce(new Error("Anki closed")); // read-back
+
+    const rawResult = await tool.execute({ cards });
+    const result = parseToolResult(rawResult);
+
+    expect(ankiClient.invoke).toHaveBeenCalledTimes(3);
+    expect(result.success).toBe(true);
+    expect(result.cards).toEqual([]);
+    expect(result.cardsChanged).toBeUndefined();
+    expect(result.alreadySuspended).toEqual([222]);
+    expect(result.cardsRequested).toBe(2);
+    expect(result.message).toContain("do not retry");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("should treat a malformed read-back as a failed read-back, not a failed suspend", async () => {
+    const cards = [111, 222];
+    ankiClient.invoke
+      .mockResolvedValueOnce([false, true]) // before
+      .mockResolvedValueOnce(true) // suspend
+      .mockResolvedValueOnce([true]); // read-back — malformed, only 1 entry for 2 cards
+
+    const rawResult = await tool.execute({ cards });
+    const result = parseToolResult(rawResult);
+
+    expect(ankiClient.invoke).toHaveBeenCalledTimes(3);
+    expect(result.success).toBe(true);
+    expect(result.cards).toEqual([]);
+    expect(result.cardsChanged).toBeUndefined();
+    expect(result.alreadySuspended).toEqual([222]);
+    expect(result.cardsRequested).toBe(2);
+    expect(result.message).toContain("do not retry");
+    expect(result.error).toBeUndefined();
+  });
+
+  it("should report a partial outcome when a card disappears before the read-back", async () => {
+    const cards = [111, 222];
+    ankiClient.invoke
+      .mockResolvedValueOnce([false, false]) // before
+      .mockResolvedValueOnce(true) // suspend
+      .mockResolvedValueOnce([true, null]); // read-back — 222 gone
+
+    const rawResult = await tool.execute({ cards });
+    const result = parseToolResult(rawResult);
+
+    expect(ankiClient.invoke).toHaveBeenCalledTimes(3);
+    expect(result.success).toBe(false);
+    expect(result.error).toBeUndefined();
+    expect(result.cards).toEqual([
+      { cardId: 111, suspended: true },
+      { cardId: 222, suspended: null },
+    ]);
+    expect(result.cardsChanged).toBe(1);
+    expect(result.message).toContain("did not end up suspended");
+  });
+
+  it("should surface a malformed pre-check reply as an error without mutating", async () => {
+    const cards = [111, 222];
+    ankiClient.invoke.mockResolvedValueOnce(null as never);
+
+    const rawResult = await tool.execute({ cards });
+    const result = parseToolResult(rawResult);
+
+    expect(ankiClient.invoke).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("areSuspended returned");
+  });
+
   describe("suspendCardsInputSchema", () => {
     it("should accept a valid array of positive integer card IDs", () => {
       const result = suspendCardsInputSchema.safeParse({ cards: [111, 222] });

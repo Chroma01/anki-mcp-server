@@ -6,6 +6,7 @@ import { AnkiConnectClient } from "@/mcp/clients/anki-connect.client";
 import { createErrorResponse } from "@/mcp/utils/anki.utils";
 import { MissingCardIdsError } from "@/mcp/utils/card-validation.utils";
 import {
+  CardSuspensionStatus,
   cardIdsSchema,
   cardSuspensionStatusSchema,
   fetchSuspensionStatuses,
@@ -33,19 +34,28 @@ export class UnsuspendCardsTool {
     name: "unsuspend",
     description:
       "Unsuspend cards so they return to normal review. Card IDs (not note IDs) — use get_cards, " +
-      "get_due_cards, or notesInfo to obtain them. Card IDs are checked for existence before " +
-      "anything is changed — AnkiConnect's own unsuspend action doesn't complain about bogus IDs, " +
-      "so without this check a typo would silently look like success. Unsuspending a card that's " +
+      "get_due_cards, or notesInfo to obtain them. Card IDs are checked for existence " +
+      "first, and nothing is changed if any is missing — AnkiConnect's own unsuspend action handles " +
+      "nonexistent IDs inconsistently (usually an error, sometimes a silent skip depending on input " +
+      "order). Unsuspending a card that's " +
       "already unsuspended is a safe no-op, so re-running with the same IDs is safe.",
     parameters: unsuspendCardsInputSchema,
     outputSchema: z.object({
-      success: z.boolean(),
+      success: z
+        .boolean()
+        .describe(
+          "False means the call ran but the read-back shows some cards are " +
+            "still suspended; inspect `cards` to see which. Retrying with the same " +
+            "IDs is safe. A call that failed outright returns an error instead.",
+        ),
       message: z.string(),
       cardsRequested: z.number(),
       cardsChanged: z
         .number()
+        .optional()
         .describe(
-          "Cards that WERE suspended before this call and are not suspended now",
+          "Cards that WERE suspended before this call and are not suspended now. " +
+            "Omitted when the read-back failed — the unsuspend was still applied.",
         ),
       alreadyUnsuspended: z
         .array(z.number())
@@ -53,7 +63,9 @@ export class UnsuspendCardsTool {
       cards: z
         .array(cardSuspensionStatusSchema)
         .describe(
-          "Final suspension status of each requested card, read back after the mutation",
+          "Final suspension status of each requested card, read back after the " +
+            "mutation. Empty when the read-back failed — the unsuspend itself still " +
+            "succeeded, so check `message` rather than treating an empty array as a no-op.",
         ),
     }),
     annotations: {
@@ -79,7 +91,8 @@ export class UnsuspendCardsTool {
       }
 
       // areSuspended reports a nonexistent card ID as null, which doubles as
-      // the existence check — unsuspend itself would silently no-op on bogus IDs.
+      // the existence check — unsuspend itself handles bogus IDs inconsistently
+      // (errors or silently skips them depending on input order).
       const before = await fetchSuspensionStatuses(cards, this.ankiClient);
       const missingIds = findMissingCardIds(before);
       if (missingIds.length > 0) {
@@ -98,26 +111,49 @@ export class UnsuspendCardsTool {
       // outcome comes from the areSuspended read-back below.
       await this.ankiClient.invoke<boolean>("unsuspend", { cards });
 
-      const after = await fetchSuspensionStatuses(cards, this.ankiClient);
-      const cardsChanged = after.filter(
-        (status, index) =>
-          status.suspended === false && before[index].suspended !== false,
-      ).length;
-      const stillSuspended = after.filter(
-        (status) => status.suspended !== false,
-      ).length;
-      const success = stillSuspended === 0;
+      // The unsuspend is committed from here on. Everything below is reporting,
+      // so it gets its own error handling: surfacing a read-back failure as a
+      // failed call would invite a retry of a mutation that already landed.
+      let after: CardSuspensionStatus[] = [];
+      let cardsChanged: number | undefined;
+      let stillSuspended = 0;
+      let readBackFailed = false;
 
-      this.logger.log(
-        `unsuspend: ${cardsChanged} card(s) newly unsuspended, ${alreadyUnsuspended.length} already unsuspended`,
-      );
+      try {
+        after = await fetchSuspensionStatuses(cards, this.ankiClient);
+        cardsChanged = after.filter(
+          (status, index) =>
+            status.suspended === false && before[index].suspended !== false,
+        ).length;
+        stillSuspended = after.filter(
+          (status) => status.suspended !== false,
+        ).length;
+      } catch (readBackError) {
+        readBackFailed = true;
+        this.logger.warn(
+          `Unsuspended ${cards.length} card(s) but could not read the new ` +
+            `suspension state back`,
+          readBackError,
+        );
+      }
+
+      const success = readBackFailed || stillSuspended === 0;
+
+      if (!readBackFailed) {
+        this.logger.log(
+          `unsuspend: ${cardsChanged} card(s) newly unsuspended, ${alreadyUnsuspended.length} already unsuspended`,
+        );
+      }
 
       return {
         success,
-        message: success
-          ? `Unsuspended ${cards.length} card(s): ${cardsChanged} newly unsuspended, ` +
-            `${alreadyUnsuspended.length} already unsuspended`
-          : `Requested unsuspend of ${cards.length} card(s), but ${stillSuspended} are still suspended`,
+        message: readBackFailed
+          ? `Unsuspended ${cards.length} card(s), but reading the new suspension ` +
+            `state back failed. The unsuspend was applied — do not retry.`
+          : success
+            ? `Unsuspended ${cards.length} card(s): ${cardsChanged} newly unsuspended, ` +
+              `${alreadyUnsuspended.length} already unsuspended`
+            : `Requested unsuspend of ${cards.length} card(s), but ${stillSuspended} are still suspended`,
         cardsRequested: cards.length,
         cardsChanged,
         alreadyUnsuspended,

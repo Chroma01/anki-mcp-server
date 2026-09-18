@@ -21,26 +21,17 @@ export const cardIdsSchema = z
  * AnkiConnect's `areSuspended` reports missing cards this way rather than
  * omitting them, so callers can tell "not suspended" from "doesn't exist".
  */
-export interface CardSuspensionStatus {
-  cardId: number;
-  suspended: boolean | null;
-}
-
 export const cardSuspensionStatusSchema = z.object({
   cardId: z.number(),
   suspended: z
-    .union([z.literal(true), z.literal(false), z.null()])
+    .boolean()
+    .nullable()
     .describe(
       "true if suspended, false if not suspended, null if the card ID does not exist",
     ),
 });
 
-export interface SuspensionCounts {
-  total: number;
-  suspendedCount: number;
-  unsuspendedCount: number;
-  missingCount: number;
-}
+export type CardSuspensionStatus = z.infer<typeof cardSuspensionStatusSchema>;
 
 export const suspensionCountsSchema = z.object({
   total: z.number(),
@@ -48,6 +39,8 @@ export const suspensionCountsSchema = z.object({
   unsuspendedCount: z.number(),
   missingCount: z.number(),
 });
+
+export type SuspensionCounts = z.infer<typeof suspensionCountsSchema>;
 
 /**
  * Call AnkiConnect's `areSuspended` and pair each result back up with its
@@ -61,10 +54,31 @@ export async function fetchSuspensionStatuses(
     cards,
   });
 
-  return cards.map((cardId, index) => ({
-    cardId,
-    suspended: results?.[index] ?? null,
-  }));
+  // `null` in this module means "card doesn't exist" and drives the
+  // pre-mutation existence check, so a malformed reply must never be coerced
+  // into it — a missing slot would look like a bogus card ID.
+  if (!Array.isArray(results) || results.length !== cards.length) {
+    throw new Error(
+      `areSuspended returned ${
+        Array.isArray(results)
+          ? `${results.length} entries`
+          : results === null
+            ? "null"
+            : typeof results
+      } for ${cards.length} card(s)`,
+    );
+  }
+
+  return cards.map((cardId, index) => {
+    const suspended = results[index];
+    if (typeof suspended !== "boolean" && suspended !== null) {
+      throw new Error(
+        `areSuspended returned ${JSON.stringify(suspended)} for card ${cardId}; ` +
+          `expected true, false, or null`,
+      );
+    }
+    return { cardId, suspended };
+  });
 }
 
 export function summarizeSuspensionStatuses(

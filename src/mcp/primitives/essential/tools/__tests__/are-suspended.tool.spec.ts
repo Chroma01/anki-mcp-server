@@ -81,6 +81,16 @@ describe("AreSuspendedTool", () => {
     expect(result.error).toContain("collection is not open");
   });
 
+  it("should surface a malformed areSuspended reply as an error", async () => {
+    ankiClient.invoke.mockResolvedValueOnce(null as never);
+
+    const rawResult = await tool.execute({ cards: [111, 222] });
+    const result = parseToolResult(rawResult);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("areSuspended returned");
+  });
+
   describe("areSuspendedInputSchema", () => {
     it("should accept a valid array of positive integer card IDs", () => {
       const result = areSuspendedInputSchema.safeParse({ cards: [111, 222] });

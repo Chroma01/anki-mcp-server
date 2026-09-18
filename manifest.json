@@ -73,7 +73,7 @@
     },
     {
       "name": "suspend",
-      "description": "Suspend cards so they're skipped during review until unsuspended"
+      "description": "Suspend cards so they're skipped during review until unsuspended. IMPORTANT: Only suspend cards the user explicitly asked to suspend — a suspended card silently drops out of review until someone unsuspends it."
     },
     {
       "name": "unsuspend",
