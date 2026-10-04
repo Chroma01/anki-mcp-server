@@ -186,13 +186,14 @@ The server runs on the same computer as your AI client and talks to AnkiConnect 
 
 #### STDIO (primary local integration)
 
-STDIO is the standard transport for local desktop MCP clients — **Claude Desktop**, **Cursor IDE**, **Cline**, **Zed Editor**, and others. The client launches the server as a subprocess and communicates over standard input/output.
+STDIO is the standard transport for local desktop MCP clients — **Claude Desktop**, **Cursor IDE**, **Cline**, **Zed Editor**, **opencode**, and others. The client launches the server as a subprocess and communicates over standard input/output.
 
 **Supported Clients:**
 - [Claude Desktop](https://claude.ai/download)
 - [Cursor IDE](https://www.cursor.com/) - AI-powered code editor
 - [Cline](https://github.com/cline/cline) - VS Code extension for AI assistance
 - [Zed Editor](https://zed.dev/) - Fast, modern code editor
+- [opencode](https://opencode.ai) - Terminal AI coding agent
 - Other MCP clients that support STDIO transport
 
 For Claude Desktop, the [MCPB bundle](#mcpb-bundle-recommended-for-claude-desktop) is the easiest path. For other clients, configure the npm package with the `--stdio` flag.
@@ -237,10 +238,28 @@ Then configure:
 }
 ```
 
+**opencode** uses its own format — servers go under `mcp`, the command is a single array, and environment variables go under `environment`:
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "anki-mcp": {
+      "type": "local",
+      "command": ["npx", "-y", "@ankimcp/anki-mcp-server", "--stdio"],
+      "enabled": true,
+      "environment": {
+        "ANKI_CONNECT_URL": "http://localhost:8765"
+      }
+    }
+  }
+}
+```
+
 **Configuration file locations:**
 - **Cursor IDE**: `~/.cursor/mcp.json` (macOS/Linux) or `%USERPROFILE%\.cursor\mcp.json` (Windows)
 - **Cline**: Accessible via settings UI in VS Code
 - **Zed Editor**: Install as MCP extension through extension marketplace
+- **opencode**: `opencode.json` in your project root, or `~/.config/opencode/opencode.json` globally
 
 For client-specific features and troubleshooting, consult your MCP client's documentation. See also [Connect to Claude Desktop](#connect-to-claude-desktop-local-mode) for a config that points directly at a built `dist/main-stdio.js`.
 
